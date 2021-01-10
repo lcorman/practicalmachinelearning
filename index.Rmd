@@ -1,0 +1,100 @@
+---
+title: "Practical Machine Learning"
+author: "Leo"
+date: "1/10/2021"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+Start by loading packages and data.
+```{r, message=FALSE}
+library(dplyr)
+library(tidyr)
+library(ggplot2)
+library(caret)
+
+df <- read.csv('pml-training.csv', na.strings = c('NA', '', '#DIV/0!'))
+df <- df[,-1]
+```
+
+Split into training (60%) and testing (40%) datasets.
+```{r}
+set.seed(54321)
+inTrain = createDataPartition(df$classe, p = .6)[[1]]
+training = df[ inTrain,]
+testing = df[-inTrain,]
+```
+
+There seem to be a lot of NAs. Remove columns that are over 90% NA from the analysis. Also remove timestamp/date columns, as these seem unlikely to be informative. Perform these same transformations on the testing dataset.
+```{r}
+num_na <- data.frame(column = colnames(training), count = rep(0, ncol(training)))
+
+for(column in 1:ncol(training)) {
+  
+  temp_count <- sum(is.na(training[ , column]))
+  
+  num_na[[column, 'count']] <- temp_count
+  
+}
+
+total_rows <- nrow(training)
+
+na_cols <- num_na %>% filter(count/total_rows > .9) %>% select(column)
+
+training <- training %>% select(-na_cols[[1]])
+testing <- testing %>% select(-na_cols[[1]])
+
+training <- training[, -c(2:4)]
+testing <- testing[, -c(2:4)]
+```
+
+I used the following code to get a box plot of each numeric variable, grouped by classe (results not shown due to space constraints). This helped to get a basic sense of the variation between the different values of classe.
+```{r, eval=FALSE}
+# Pivot table from wide to long
+training_long <- tidyr::pivot_longer(training, 
+                      cols = -c(classe, user_name, new_window), 
+                      names_to = "var", 
+                      values_to = "value")
+
+ggplot(data = training_long, aes(x = classe, y = value)) +
+  geom_boxplot() +
+  facet_wrap(vars(var), scales = "free")
+```
+
+Next, I created three different models to compare: decision tree, linear discriminant analysis (LDA), and K nearest neighbors (KNN). I selected these model types because this is a classification problem with more than two classes. I trained the models on the training set, using k-fold cross validation with k = 5 (did not use for KNN, as the model took too long to run) and all remaining variables as predictors.
+```{r}
+set.seed(12345)
+
+train_control <- trainControl(method="cv", number=5)
+
+# Decision tree
+model_tree <- train(classe ~ ., data = training, method = "rpart", trControl = train_control)
+# Linear discriminant analysis
+model_lda <- train(classe ~ ., data = training, method = "lda", trControl = train_control)
+# K nearest neighbors
+model_knn <- train(classe ~ ., data = training, method = "knn")
+```
+
+The decision tree performs poorly on the testing set, with only 52% accuracy. Interestingly, the model does not predict any D's. In general, this model seems to be a poor fit.
+```{r}
+predict_tree <- predict(model_tree, testing)
+confusionMatrix(predict_tree, as.factor(testing$classe))
+```
+
+The LDA model performed better, with 75% overall accuracy. The performance is also fairly balanced across the different classes, with Balanced Accuracy (Sensitivity + Specificity /2) above .8 for each class. The model has higher specificity than sensitivity, sometimes with a fairly substantial difference. For example, if a given observation is in class B, there is a 66% probability that the model will predict class B; but if the observation is NOT in class B, there is a 94% probability that the model will predict NOT class B.
+```{r}
+predict_lda <- predict(model_lda, testing)
+confusionMatrix(predict_lda, as.factor(testing$classe))
+```
+
+The KNN model performs the best of the three, with over 90% accuracy. Since it is being evaluated on the testing set, this seems like a reasonable estimate of out of sample error. The strong performance also seems to be fairly balanced across the different classes, as each class has specificity above 86% and sensitivity above 96%. Strong performance in class A is especially important in the context of this problem, as the model seems to be able to distinguish between correct exercise form (class A) and incorrect form (all other classes) with a high degree of accuracy.
+```{r}
+predict_knn <- predict(model_knn, testing)
+confusionMatrix(predict_knn, as.factor(testing$classe))
+```
+
+Based on these results, it is recommended to use the KNN model going forward.
+
